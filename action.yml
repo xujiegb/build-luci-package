@@ -167,6 +167,16 @@ runs:
         make defconfig
         make package/${PACKAGE}/compile -j"$(nproc)" V=s
 
+    - name: Compute ref slug
+      id: slug
+      shell: bash
+      run: |
+        set -euo pipefail
+        # upload-artifact forbids / \ : * ? " < > | in names,
+        # so replace / with - for branch refs like feat/foo
+        ref="${GITHUB_REF_NAME//\//-}"
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
     - name: Resolve artifact paths
       id: artifacts
       shell: bash
@@ -216,7 +226,7 @@ runs:
     - name: Upload artifact (${{ inputs.pkg_type }})
       uses: actions/upload-artifact@v6
       with:
-        name: ${{ inputs.package }}-${{ github.ref_name }}-${{ inputs.pkg_type }}
+        name: ${{ inputs.package }}-${{ steps.slug.outputs.ref }}-${{ inputs.pkg_type }}
         path: |
           ${{ steps.artifacts.outputs.paths }}
 
