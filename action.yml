@@ -29,8 +29,12 @@ inputs:
   artifact_paths:
     description: Newline-separated artifact paths (relative to SDK dir, supports $ARCH/$SDK_DIR/$PACKAGE)
     required: true
+  release_body_repo:
+    description: GitHub repo containing the release body file (e.g. eamonxg/assets). Leave empty to use a local file.
+    required: false
+    default: ""
   release_body_path:
-    description: Release body markdown path (relative to repo)
+    description: Release body markdown path — relative to repo root when release_body_repo is set, otherwise relative to the local workspace.
     required: false
     default: ""
 runs:
@@ -233,24 +237,40 @@ runs:
     - name: Resolve release body path
       id: release_body
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         path="${{ inputs.release_body_path }}"
-        source_dir="${{ inputs.source_dir }}"
-        if [ -z "$source_dir" ]; then
-          source_dir="."
-        fi
-        if [[ "$path" != /* && "$path" != ./* && "$source_dir" != "." ]]; then
-          candidate="${source_dir%/}/${path}"
-          if [ -f "$candidate" ]; then
-            path="$candidate"
+        repo="${{ inputs.release_body_repo }}"
+        empty="$GITHUB_WORKSPACE/.release-body-empty"
+
+        if [ -n "$repo" ] && [ -n "$path" ]; then
+          out="$GITHUB_WORKSPACE/.release-body.md"
+          if gh api "repos/${repo}/contents/${path}" --jq '.content' | base64 -d > "$out" 2>/dev/null && [ -s "$out" ]; then
+            echo "path=$out" >> "$GITHUB_OUTPUT"
+          else
+            echo "Warning: could not fetch '${path}' from '${repo}', using empty body" >&2
+            : > "$empty"
+            echo "path=$empty" >> "$GITHUB_OUTPUT"
           fi
+        else
+          source_dir="${{ inputs.source_dir }}"
+          if [ -z "$source_dir" ]; then
+            source_dir="."
+          fi
+          if [[ "$path" != /* && "$path" != ./* && "$source_dir" != "." ]]; then
+            candidate="${source_dir%/}/${path}"
+            if [ -f "$candidate" ]; then
+              path="$candidate"
+            fi
+          fi
+          if [ -z "$path" ] || [ ! -f "$path" ]; then
+            : > "$empty"
+            path="$empty"
+          fi
+          echo "path=$path" >> "$GITHUB_OUTPUT"
         fi
-        if [ -z "$path" ] || [ ! -f "$path" ]; then
-          path="$GITHUB_WORKSPACE/.release-body-empty"
-          : > "$path"
-        fi
-        echo "path=$path" >> "$GITHUB_OUTPUT"
 
     - name: Release ${{ inputs.package }} (${{ inputs.pkg_type }})
       if: ${{ github.ref_type == 'tag' }}
