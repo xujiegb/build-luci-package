@@ -27,7 +27,7 @@ inputs:
     required: false
     default: ""
   artifact_paths:
-    description: Newline-separated artifact paths (relative to SDK dir, supports $ARCH/$SDK_DIR/$PACKAGE)
+    description: Newline-separated artifact paths (relative to SDK dir, supports \$ARCH/\$SDK_DIR/\$PACKAGE)
     required: true
   release_body_repo:
     description: GitHub repo containing the release body file (e.g. eamonxg/assets). Leave empty to use a local file.
@@ -40,8 +40,8 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v6
-      if: ${{ inputs.skip_checkout != 'true' }}
+    - uses: actions/checkout@v4
+      if: \${{ inputs.skip_checkout != 'true' }}
       with:
         fetch-depth: 0
 
@@ -60,7 +60,7 @@ runs:
         SDK_CPU="x86-64"
         CPU_DIR="x86"
         SUB_DIR="64"
-        case "${{ inputs.pkg_type }}" in
+        case "\${{ inputs.pkg_type }}" in
           ipk)
             SDK_URL="https://downloads.openwrt.org/releases/24.10.3"
             SDK_DIR="ipk_SDK"
@@ -70,106 +70,106 @@ runs:
             SDK_DIR="apk_SDK"
             ;;
           *)
-            echo "Unsupported pkg_type: ${{ inputs.pkg_type }}" >&2
+            echo "Unsupported pkg_type: \${{ inputs.pkg_type }}" >&2
             exit 1
             ;;
         esac
 
-        INDEX_URL="${SDK_URL}/targets/${CPU_DIR}/${SUB_DIR}/"
-        SDK_TAR=$(curl -s "$INDEX_URL" | grep -oE "openwrt-sdk[^\"]*${SDK_CPU}[^\"]*\.tar\.(zst|xz)" | head -n 1)
+        INDEX_URL="\${SDK_URL}/targets/\${CPU_DIR}/\${SUB_DIR}/"
+        SDK_TAR=\$(curl -s "\$INDEX_URL" | grep -oE "openwrt-sdk[^\"]*\${SDK_CPU}[^\"]*\.tar\.(zst|xz)" | head -n 1)
 
-        echo "SDK: $SDK_TAR"
-        curl -sI "$INDEX_URL/$SDK_TAR" | grep -iE '^(etag|last-modified|content-length):' > .sdk-meta
+        echo "SDK: \$SDK_TAR"
+        curl -sI "\$INDEX_URL/\$SDK_TAR" | grep -iE '^(etag|last-modified|content-length):' > .sdk-meta
         cat .sdk-meta
 
         {
-          echo "arch=$ARCH"
-          echo "sdk_dir=$SDK_DIR"
-          echo "index_url=$INDEX_URL"
-          echo "tar=$SDK_TAR"
-        } >> "$GITHUB_OUTPUT"
+          echo "arch=\$ARCH"
+          echo "sdk_dir=\$SDK_DIR"
+          echo "index_url=\$INDEX_URL"
+          echo "tar=\$SDK_TAR"
+        } >> "\$GITHUB_OUTPUT"
 
     - name: Cache SDK
       id: cache
-      if: ${{ github.ref_type != 'tag' }}
-      uses: actions/cache@v5
+      if: \${{ github.ref_type != 'tag' }}
+      uses: actions/cache@v4
       with:
-        path: tmp/${{ steps.sdk.outputs.sdk_dir }}
-        key: ${{ steps.sdk.outputs.tar }}-${{ inputs.pkg_type }}-${{ hashFiles('.sdk-meta') }}
+        path: tmp/\${{ steps.sdk.outputs.sdk_dir }}
+        key: \${{ steps.sdk.outputs.tar }}-\${{ inputs.pkg_type }}-\${{ hashFiles('.sdk-meta') }}
 
     - name: Download SDK
-      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      if: \${{ steps.cache.outputs.cache-hit != 'true' }}
       shell: bash
       run: |
         set -euo pipefail
         echo "Cache MISS - Downloading SDK"
         mkdir -p tmp
-        curl -SLk --connect-timeout 30 --retry 2 "${{ steps.sdk.outputs.index_url }}/${{ steps.sdk.outputs.tar }}" -o "tmp/${{ steps.sdk.outputs.tar }}"
+        curl -SLk --connect-timeout 30 --retry 2 "\${{ steps.sdk.outputs.index_url }}/\${{ steps.sdk.outputs.tar }}" -o "tmp/\${{ steps.sdk.outputs.tar }}"
         cd tmp
-        if echo "${{ steps.sdk.outputs.tar }}" | grep -q \.zst$; then
-          zstd -d "${{ steps.sdk.outputs.tar }}" -o SDK.tar && tar xf SDK.tar
+        if echo "\${{ steps.sdk.outputs.tar }}" | grep -q \.zst\$; then
+          zstd -d "\${{ steps.sdk.outputs.tar }}" -o SDK.tar && tar xf SDK.tar
         else
-          tar xf "${{ steps.sdk.outputs.tar }}"
+          tar xf "\${{ steps.sdk.outputs.tar }}"
         fi
-        mv $(ls -d openwrt-sdk-* | head -n 1) "${{ steps.sdk.outputs.sdk_dir }}"
+        mv \$(ls -d openwrt-sdk-* | head -n 1) "\${{ steps.sdk.outputs.sdk_dir }}"
 
-    - name: Build ${{ inputs.package }} (${{ inputs.pkg_type }})
+    - name: Build \${{ inputs.package }} (\${{ inputs.pkg_type }})
       shell: bash
       run: |
         set -euo pipefail
-        PACKAGE="${{ inputs.package }}"
-        SDK_DIR="${{ steps.sdk.outputs.sdk_dir }}"
-        SOURCE_DIR="${{ inputs.source_dir }}"
-        if [ -z "$SOURCE_DIR" ]; then
+        PACKAGE="\${{ inputs.package }}"
+        SDK_DIR="\${{ steps.sdk.outputs.sdk_dir }}"
+        SOURCE_DIR="\${{ inputs.source_dir }}"
+        if [ -z "\$SOURCE_DIR" ]; then
           SOURCE_DIR="."
         fi
-        SOURCE_DIR="${SOURCE_DIR%/}"
-        if [ ! -d "$SOURCE_DIR" ]; then
-          echo "source_dir not found: $SOURCE_DIR" >&2
+        SOURCE_DIR="\${SOURCE_DIR%/}"
+        if [ ! -d "\$SOURCE_DIR" ]; then
+          echo "source_dir not found: \$SOURCE_DIR" >&2
           exit 1
         fi
 
-        RSYNC_EXCLUDES=$(cat <<'EOF'
-        ${{ inputs.rsync_excludes }}
-        EOF
+        RSYNC_EXCLUDES=\$(cat <<'RSYNC_EOF'
+\${{ inputs.rsync_excludes }}
+RSYNC_EOF
         )
 
-        mkdir -p "tmp/${SDK_DIR}/package/${PACKAGE}"
+        mkdir -p "tmp/\${SDK_DIR}/package/\${PACKAGE}"
         exclude_args=()
         while IFS= read -r pattern; do
-          pattern="$(echo "$pattern" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          [ -z "$pattern" ] && continue
-          exclude_args+=(--exclude "$pattern")
-        done <<< "$RSYNC_EXCLUDES"
+          pattern="\$(echo "\$pattern" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [ -z "\$pattern" ] && continue
+          exclude_args+=(--exclude "\$pattern")
+        done <<< "\$RSYNC_EXCLUDES"
 
-        rsync -a --delete "${SOURCE_DIR}/" "tmp/${SDK_DIR}/package/${PACKAGE}/" \
-          --exclude tmp "${exclude_args[@]}"
+        rsync -a --delete "\${SOURCE_DIR}/" "tmp/\${SDK_DIR}/package/\${PACKAGE}/" \
+          --exclude tmp "\${exclude_args[@]}"
 
-        cd "tmp/${SDK_DIR}"
+        cd "tmp/\${SDK_DIR}"
         cp feeds.conf.default feeds.conf
         echo "=== feeds.conf ==="
         cat feeds.conf
         echo "---------- testing feed git URLs ----------"
         grep -E '^[[:space:]]*src-git' feeds.conf | while read -r line; do
-          name=$(echo "$line" | awk '{print $(NF-1)}')
-          url_with_rev=$(echo "$line" | awk '{print $NF}')
-          url_base=${url_with_rev%%^*}
-          url=${url_base%%;*}
-          if git ls-remote "$url" HEAD >/dev/null 2>&1; then
-            echo "OK: $name $url_with_rev (remote: $url)"
+          name=\$(echo "\$line" | awk '{print \$(NF-1)}')
+          url_with_rev=\$(echo "\$line" | awk '{print \$NF}')
+          url_base=\${url_with_rev%%^*}
+          url=\${url_base%%;*}
+          if git ls-remote "\$url" HEAD >/dev/null 2>&1; then
+            echo "OK: \$name \$url_with_rev (remote: \$url)"
           else
-            echo "FAILED: $name $url_with_rev (remote: $url)"
+            echo "FAILED: \$name \$url_with_rev (remote: \$url)"
           fi
         done
 
-        if [ -n "${{ inputs.prep_script }}" ]; then
-          ${{ inputs.prep_script }}
+        if [ -n "\${{ inputs.prep_script }}" ]; then
+          \${{ inputs.prep_script }}
         else
           ./scripts/feeds update -a
           ./scripts/feeds install -a
         fi
         make defconfig
-        make package/${PACKAGE}/compile -j"$(nproc)" V=s
+        make package/\${PACKAGE}/compile -j"\$(nproc)" V=s
 
     - name: Compute ref slug
       id: slug
@@ -178,107 +178,109 @@ runs:
         set -euo pipefail
         # upload-artifact forbids / \ : * ? " < > | in names,
         # so replace / with - for branch refs like feat/foo
-        ref="${GITHUB_REF_NAME//\//-}"
-        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+        ref="\${GITHUB_REF_NAME//\/\/-}"
+        echo "ref=\$ref" >> "\$GITHUB_OUTPUT"
 
     - name: Resolve artifact paths
       id: artifacts
       shell: bash
       run: |
         set -euo pipefail
-        PACKAGE="${{ inputs.package }}"
-        SDK_DIR="${{ steps.sdk.outputs.sdk_dir }}"
-        ARCH="${{ steps.sdk.outputs.arch }}"
+        PACKAGE="\${{ inputs.package }}"
+        SDK_DIR="\${{ steps.sdk.outputs.sdk_dir }}"
+        ARCH="\${{ steps.sdk.outputs.arch }}"
 
         resolve_paths() {
           local result=""
 
           while IFS= read -r line; do
-            line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            [ -z "$line" ] && continue
-            local expanded="$line"
+            line="\$(echo "\$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -z "\$line" ] && continue
+            local expanded="\$line"
 
-            expanded="${expanded//\$SDK_DIR/$SDK_DIR}"
-            expanded="${expanded//\$\{SDK_DIR\}/$SDK_DIR}"
-            expanded="${expanded//\$ARCH/$ARCH}"
-            expanded="${expanded//\$\{ARCH\}/$ARCH}"
-            expanded="${expanded//\$PACKAGE/$PACKAGE}"
-            expanded="${expanded//\$\{PACKAGE\}/$PACKAGE}"
+            expanded="\${expanded//\\\$SDK_DIR/\$SDK_DIR}"
+            expanded="\${expanded//\\\${SDK_DIR\}/\$SDK_DIR}"
+            expanded="\${expanded//\\\$ARCH/\$ARCH}"
+            expanded="\${expanded//\\\${ARCH\}/\$ARCH}"
+            expanded="\${expanded//\\\$PACKAGE/\$PACKAGE}"
+            expanded="\${expanded//\\\${PACKAGE\}/\$PACKAGE}"
 
-            if [[ "$expanded" != /* && "$expanded" != tmp/* ]]; then
-              expanded="tmp/${SDK_DIR}/${expanded}"
+            if [[ "\$expanded" != /* && "\$expanded" != tmp/* ]]; then
+              expanded="tmp/\${SDK_DIR}/\${expanded}"
             fi
 
-            result+="${expanded}"
-            result+=$'\n'
+            result+="\${expanded}"
+            result+=\$'\\n'
 
-          done << 'EOF'
-        ${{ inputs.artifact_paths }}
-        EOF
+          done << 'ARTIFACT_EOF'
+\${{ inputs.artifact_paths }}
+ARTIFACT_EOF
 
-          printf '%s' "$result"
+          printf '%s' "\$result"
         }
 
-        paths="$(resolve_paths)"
+        paths="\$(resolve_paths)"
 
         {
           echo "paths<<EOF"
-          printf '%s\n' "$paths"
+          printf '%s\n' "\$paths"
           echo "EOF"
-        } >> "$GITHUB_OUTPUT"
+        } >> "\$GITHUB_OUTPUT"
 
-    - name: Upload artifact (${{ inputs.pkg_type }})
-      uses: actions/upload-artifact@v6
+    - name: Upload artifact (\${{ inputs.pkg_type }})
+      uses: actions/upload-artifact@v4
       with:
-        name: ${{ inputs.package }}-${{ steps.slug.outputs.ref }}-${{ inputs.pkg_type }}
+        name: \${{ inputs.package }}-\${{ steps.slug.outputs.ref }}-\${{ inputs.pkg_type }}
         path: |
-          ${{ steps.artifacts.outputs.paths }}
+          \${{ steps.artifacts.outputs.paths }}
 
     - name: Resolve release body path
       id: release_body
       shell: bash
       env:
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: \${{ github.token }}
       run: |
         set -euo pipefail
-        path="${{ inputs.release_body_path }}"
-        repo="${{ inputs.release_body_repo }}"
-        empty="$GITHUB_WORKSPACE/.release-body-empty"
+        path="\${{ inputs.release_body_path }}"
+        repo="\${{ inputs.release_body_repo }}"
+        empty="\$GITHUB_WORKSPACE/.release-body-empty"
 
-        if [ -n "$repo" ] && [ -n "$path" ]; then
-          out="$GITHUB_WORKSPACE/.release-body.md"
-          if gh api "repos/${repo}/contents/${path}" --jq '.content' | base64 -d > "$out" 2>/dev/null && [ -s "$out" ]; then
-            echo "path=$out" >> "$GITHUB_OUTPUT"
+        if [ -n "\$repo" ] && [ -n "\$path" ]; then
+          out="\$GITHUB_WORKSPACE/.release-body.md"
+          if gh api "repos/\${repo}/contents/\${path}" --jq '.content' | base64 -d > "\$out" 2>/dev/null && [ -s "\$out" ]; then
+            echo "path=\$out" >> "\$GITHUB_OUTPUT"
           else
-            echo "Warning: could not fetch '${path}' from '${repo}', using empty body" >&2
-            : > "$empty"
-            echo "path=$empty" >> "$GITHUB_OUTPUT"
+            echo "Warning: could not fetch '\${path}' from '\${repo}', using empty body" >&2
+            : > "\$empty"
+            echo "path=\$empty" >> "\$GITHUB_OUTPUT"
           fi
         else
-          source_dir="${{ inputs.source_dir }}"
-          if [ -z "$source_dir" ]; then
+          source_dir="\${{ inputs.source_dir }}"
+          if [ -z "\$source_dir" ]; then
             source_dir="."
           fi
-          if [[ "$path" != /* && "$path" != ./* && "$source_dir" != "." ]]; then
-            candidate="${source_dir%/}/${path}"
-            if [ -f "$candidate" ]; then
-              path="$candidate"
+          if [[ "\$path" != /* && "\$path" != ./* && "\$source_dir" != "." ]]; then
+            candidate="\${source_dir%/}/\${path}"
+            if [ -f "\$candidate" ]; then
+              path="\$candidate"
             fi
           fi
-          if [ -z "$path" ] || [ ! -f "$path" ]; then
-            : > "$empty"
-            path="$empty"
+          if [ -z "\$path" ] || [ ! -f "\$path" ]; then
+            : > "\$empty"
+            path="\$empty"
           fi
-          echo "path=$path" >> "$GITHUB_OUTPUT"
+          echo "path=\$path" >> "\$GITHUB_OUTPUT"
         fi
 
-    - name: Release ${{ inputs.package }} (${{ inputs.pkg_type }})
-      if: ${{ github.ref_type == 'tag' }}
+    - name: Release \${{ inputs.package }} (\${{ inputs.pkg_type }})
+      if: \${{ github.ref_type == 'tag' }}
       uses: softprops/action-gh-release@v2
+      env:
+        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       with:
-        name: ${{ inputs.package }}-${{ github.ref_name }}
-        body_path: ${{ steps.release_body.outputs.path }}
+        name: \${{ inputs.package }}-\${{ github.ref_name }}
+        body_path: \${{ steps.release_body.outputs.path }}
         draft: false
         prerelease: false
         files: |
-          ${{ steps.artifacts.outputs.paths }}
+          \${{ steps.artifacts.outputs.paths }}
