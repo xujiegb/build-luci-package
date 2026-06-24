@@ -62,7 +62,7 @@ runs:
         SUB_DIR="64"
         case "${{ inputs.pkg_type }}" in
           ipk)
-            SDK_URL="https://downloads.openwrt.org/releases/24.10.3"
+            SDK_URL="https://downloads.openwrt.org/releases/24.10.4"
             SDK_DIR="ipk_SDK"
             ;;
           apk)
