@@ -37,8 +37,12 @@ inputs:
     description: Release body markdown path — relative to repo root when release_body_repo is set, otherwise relative to the local workspace.
     required: false
     default: ""
+  release:
+    description: Set to "true" to create or update a GitHub Release when the build is not running on a tag.
+    required: false
+    default: "false"
   release_tag:
-    description: GitHub Release tag to create or update. Leave empty to skip release.
+    description: GitHub Release tag to create or update for non-tag release builds.
     required: false
     default: ""
 runs:
@@ -240,7 +244,7 @@ runs:
 
     - name: Resolve release body path
       id: release_body
-      if: ${{ inputs.release_tag != '' }}
+      if: ${{ github.ref_type == 'tag' || inputs.release == 'true' }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -279,16 +283,22 @@ runs:
 
     - name: Resolve release target
       id: release_target
-      if: ${{ inputs.release_tag != '' }}
+      if: ${{ github.ref_type == 'tag' || inputs.release == 'true' }}
       shell: bash
       env:
+        RELEASE: ${{ inputs.release }}
         RELEASE_TAG: ${{ inputs.release_tag }}
       run: |
         set -euo pipefail
-        tag="$(printf '%s' "$RELEASE_TAG" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-        if [ -z "$tag" ]; then
-          echo "release_tag is empty" >&2
-          exit 1
+
+        if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+          tag="$GITHUB_REF_NAME"
+        else
+          tag="$(printf '%s' "$RELEASE_TAG" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ "$RELEASE" = "true" ] && [ -z "$tag" ]; then
+            echo "release_tag is required when release is true outside tag builds" >&2
+            exit 1
+          fi
         fi
 
         {
@@ -297,7 +307,7 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
     - name: Release ${{ inputs.package }} (${{ inputs.pkg_type }})
-      if: ${{ inputs.release_tag != '' }}
+      if: ${{ github.ref_type == 'tag' || inputs.release == 'true' }}
       uses: softprops/action-gh-release@v2
       with:
         name: ${{ inputs.package }}-${{ steps.release_target.outputs.tag_name }}
