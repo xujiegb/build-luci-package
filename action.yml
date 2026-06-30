@@ -37,6 +37,10 @@ inputs:
     description: Release body markdown path — relative to repo root when release_body_repo is set, otherwise relative to the local workspace.
     required: false
     default: ""
+  release_tag:
+    description: GitHub Release tag to create or update. Leave empty to skip release.
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -236,6 +240,7 @@ runs:
 
     - name: Resolve release body path
       id: release_body
+      if: ${{ inputs.release_tag != '' }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -272,11 +277,32 @@ runs:
           echo "path=$path" >> "$GITHUB_OUTPUT"
         fi
 
+    - name: Resolve release target
+      id: release_target
+      if: ${{ inputs.release_tag != '' }}
+      shell: bash
+      env:
+        RELEASE_TAG: ${{ inputs.release_tag }}
+      run: |
+        set -euo pipefail
+        tag="$(printf '%s' "$RELEASE_TAG" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        if [ -z "$tag" ]; then
+          echo "release_tag is empty" >&2
+          exit 1
+        fi
+
+        {
+          echo "tag_name=$tag"
+          echo "target_commitish=$(git rev-parse HEAD)"
+        } >> "$GITHUB_OUTPUT"
+
     - name: Release ${{ inputs.package }} (${{ inputs.pkg_type }})
-      if: ${{ github.ref_type == 'tag' }}
+      if: ${{ inputs.release_tag != '' }}
       uses: softprops/action-gh-release@v2
       with:
-        name: ${{ inputs.package }}-${{ github.ref_name }}
+        name: ${{ inputs.package }}-${{ steps.release_target.outputs.tag_name }}
+        tag_name: ${{ steps.release_target.outputs.tag_name }}
+        target_commitish: ${{ steps.release_target.outputs.target_commitish }}
         body_path: ${{ steps.release_body.outputs.path }}
         draft: false
         prerelease: false
