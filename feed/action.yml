@@ -138,6 +138,11 @@ runs:
           rm -rf tmp
           make defconfig
           make "package/$pkg/compile" -j"$(nproc)" V=s
+          # buildroot's ipkg-remove deletes same-name ipks of other versions on the
+          # next build of this package — stash every produced file after each round
+          mkdir -p "$GITHUB_WORKSPACE/stash"
+          cp -f bin/packages/*/"${{ inputs.feed_name }}"/*.ipk "$GITHUB_WORKSPACE/stash/" 2>/dev/null || true
+          cp -f bin/packages/*/"${{ inputs.feed_name }}"/*.apk "$GITHUB_WORKSPACE/stash/" 2>/dev/null || true
           echo "::endgroup::"
         done
 
@@ -146,8 +151,11 @@ runs:
       run: |
         set -euo pipefail
         cd sdk
-        make package/index V=s
         FEED_BIN=$(echo bin/packages/*/"${{ inputs.feed_name }}")
+        # restore stashed older-version packages removed by ipkg-remove (no-clobber:
+        # freshly built files win), then index over the complete set
+        cp -n "$GITHUB_WORKSPACE/stash/"* "$FEED_BIN"/ 2>/dev/null || true
+        make package/index V=s
         ls -la "$FEED_BIN"
         if [ "${{ inputs.pkg_type }}" = ipk ]; then
           test -s "$FEED_BIN/Packages" && test -s "$FEED_BIN/Packages.sig"
