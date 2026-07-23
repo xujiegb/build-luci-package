@@ -44,26 +44,30 @@ runs:
           echo "tar=$SDK_TAR"
         } >> "$GITHUB_OUTPUT"
 
-    - name: Cache SDK
+    # Cache ONLY the pristine tarball — never the extracted tree. A post-job cache of
+    # the sdk/ directory captures dirty state (feeds checkouts, .config, build_dir)
+    # and poisons the next run's feeds/defconfig phase.
+    - name: Cache SDK tarball
       id: cache
       uses: actions/cache@v5
       with:
-        path: sdk
-        key: feed-sdk-${{ inputs.sdk_version }}-${{ inputs.pkg_type }}-${{ steps.sdk.outputs.tar }}
+        path: sdk.tar.zst
+        key: feed-sdktar-${{ inputs.sdk_version }}-${{ steps.sdk.outputs.tar }}
 
-    - name: Download SDK
+    - name: Download SDK tarball
       if: ${{ steps.cache.outputs.cache-hit != 'true' }}
       shell: bash
       run: |
         set -euo pipefail
         curl -fSL --connect-timeout 30 --retry 3 \
           "${{ steps.sdk.outputs.index_url }}${{ steps.sdk.outputs.tar }}" -o sdk.tar.zst
-        mkdir -p sdk
-        case "${{ steps.sdk.outputs.tar }}" in
-          *.zst) zstd -d sdk.tar.zst -o sdk.tar && tar -xf sdk.tar -C sdk --strip-components=1 ;;
-          *)     tar -xf sdk.tar.zst -C sdk --strip-components=1 ;;
-        esac
-        rm -f sdk.tar sdk.tar.zst
+
+    - name: Extract SDK (always fresh)
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -rf sdk && mkdir sdk
+        tar -xf sdk.tar.zst -C sdk --strip-components=1
 
     - name: Prepare feed sources and keys
       shell: bash
