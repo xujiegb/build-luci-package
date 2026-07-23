@@ -1,0 +1,181 @@
+name: Build Feed Channel
+description: Build multiple LuCI packages at multiple refs into a signed OpenWrt feed
+inputs:
+  pkg_type:
+    description: ipk or apk
+    required: true
+  sdk_version:
+    description: OpenWrt release version, e.g. 24.10.7
+    required: true
+  build_list:
+    description: JSON array [{url, pkg, ref, langs}] in build order
+    required: true
+  out_dir:
+    description: Directory (relative to workspace) to stage the finished feed into
+    required: true
+  feed_name:
+    description: OpenWrt feed name
+    required: false
+    default: eamonxg
+  usign_pub:
+    description: Path to usign public key; when set, Packages.sig is verified after indexing
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install build deps
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends build-essential curl ca-certificates xz-utils zstd git python3 rsync jq
+
+    - name: Locate SDK tarball
+      id: sdk
+      shell: bash
+      run: |
+        set -euo pipefail
+        INDEX_URL="https://downloads.openwrt.org/releases/${{ inputs.sdk_version }}/targets/x86/64/"
+        SDK_TAR=$(curl -fs "$INDEX_URL" | grep -oE 'openwrt-sdk[^"]*x86-64[^"]*\.tar\.(zst|xz)' | head -n1)
+        [ -n "$SDK_TAR" ] || { echo "no SDK found at $INDEX_URL" >&2; exit 1; }
+        echo "SDK: $SDK_TAR"
+        {
+          echo "index_url=$INDEX_URL"
+          echo "tar=$SDK_TAR"
+        } >> "$GITHUB_OUTPUT"
+
+    # Cache ONLY the pristine tarball — never the extracted tree. A post-job cache of
+    # the sdk/ directory captures dirty state (feeds checkouts, .config, build_dir)
+    # and poisons the next run's feeds/defconfig phase.
+    - name: Cache SDK tarball
+      id: cache
+      uses: actions/cache@v5
+      with:
+        path: sdk.tar.zst
+        key: feed-sdktar-${{ inputs.sdk_version }}-${{ steps.sdk.outputs.tar }}
+
+    - name: Download SDK tarball
+      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -fSL --connect-timeout 30 --retry 3 \
+          "${{ steps.sdk.outputs.index_url }}${{ steps.sdk.outputs.tar }}" -o sdk.tar.zst
+
+    - name: Extract SDK (always fresh)
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -rf sdk && mkdir sdk
+        tar -xf sdk.tar.zst -C sdk --strip-components=1
+
+    - name: Prepare feed sources and keys
+      shell: bash
+      env:
+        BUILD_LIST: ${{ inputs.build_list }}
+      run: |
+        set -euo pipefail
+        cd sdk
+        # signing keys (spec §7): usign for ipk, EC pem for apk
+        if [ "${{ inputs.pkg_type }}" = ipk ]; then
+          [ -n "${USIGN_KEY:-}" ] || { echo "USIGN_KEY env missing" >&2; exit 1; }
+          printf '%s\n' "$USIGN_KEY" > key-build
+        else
+          [ -n "${APK_KEY:-}" ] || { echo "APK_KEY env missing" >&2; exit 1; }
+          printf '%s\n' "$APK_KEY" > private-key.pem
+        fi
+
+        mkdir -p "$GITHUB_WORKSPACE/feedsrc"
+        cp feeds.conf.default feeds.conf
+        echo "src-link ${{ inputs.feed_name }} $GITHUB_WORKSPACE/feedsrc" >> feeds.conf
+
+        # clone each unique repo once (full history: tags + version epochs need it)
+        mkdir -p "$GITHUB_WORKSPACE/repos"
+        jq -r '[.[].url] | unique | .[]' <<<"$BUILD_LIST" | while read -r url; do
+          name=$(basename "$url" .git)
+          git clone "$url" "$GITHUB_WORKSPACE/repos/$name"
+        done
+
+        # populate feedsrc with each package's FIRST listed ref so feeds update sees every package
+        jq -c 'group_by(.pkg) | map(.[0]) | .[]' <<<"$BUILD_LIST" | while read -r e; do
+          url=$(jq -r .url <<<"$e"); pkg=$(jq -r .pkg <<<"$e"); ref=$(jq -r .ref <<<"$e")
+          name=$(basename "$url" .git)
+          git -C "$GITHUB_WORKSPACE/repos/$name" -c advice.detachedHead=false checkout -q "$ref"
+          mkdir -p "$GITHUB_WORKSPACE/feedsrc/$pkg"
+          rsync -a --delete --exclude .github --exclude .vscode --exclude .dev \
+            "$GITHUB_WORKSPACE/repos/$name/" "$GITHUB_WORKSPACE/feedsrc/$pkg/"
+        done
+
+        ./scripts/feeds update -f base luci "${{ inputs.feed_name }}"
+        # luci-base + i18n base packages for every requested language (proven prep from package repos)
+        langs=$(jq -r '[.[].langs[]] | unique | .[]' <<<"$BUILD_LIST")
+        install_list="luci-base"
+        for l in $langs; do install_list="$install_list luci-i18n-base-$l"; done
+        # shellcheck disable=SC2086
+        ./scripts/feeds install -f $install_list
+        ./scripts/feeds install -f -p "${{ inputs.feed_name }}" -a
+
+        # config seed BEFORE defconfig (proven mechanism; zh mapping: zh-cn→zh_Hans, zh-tw→zh_Hant)
+        echo "CONFIG_SIGNED_PACKAGES=y" >> .config
+        for l in $langs; do
+          case "$l" in zh-cn) sym=zh_Hans ;; zh-tw) sym=zh_Hant ;; *) sym=$l ;; esac
+          echo "CONFIG_LUCI_LANG_$sym=y" >> .config
+        done
+        make defconfig
+
+    - name: Build all refs
+      shell: bash
+      env:
+        BUILD_LIST: ${{ inputs.build_list }}
+      run: |
+        set -euo pipefail
+        cd sdk
+        jq -c '.[]' <<<"$BUILD_LIST" | while read -r e; do
+          url=$(jq -r .url <<<"$e"); pkg=$(jq -r .pkg <<<"$e"); ref=$(jq -r .ref <<<"$e")
+          name=$(basename "$url" .git)
+          echo "::group::build $pkg @ $ref"
+          git -C "$GITHUB_WORKSPACE/repos/$name" -c advice.detachedHead=false checkout -q "$ref"
+          rsync -a --delete --exclude .github --exclude .vscode --exclude .dev \
+            "$GITHUB_WORKSPACE/repos/$name/" "$GITHUB_WORKSPACE/feedsrc/$pkg/"
+          ./scripts/feeds update -i "${{ inputs.feed_name }}"
+          ./scripts/feeds install -f -p "${{ inputs.feed_name }}" -a
+          rm -rf tmp
+          make defconfig
+          make "package/$pkg/compile" -j"$(nproc)" V=s
+          # buildroot's ipkg-remove deletes same-name ipks of other versions on the
+          # next build of this package — stash every produced file after each round
+          mkdir -p "$GITHUB_WORKSPACE/stash"
+          cp -f bin/packages/*/"${{ inputs.feed_name }}"/*.ipk "$GITHUB_WORKSPACE/stash/" 2>/dev/null || true
+          cp -f bin/packages/*/"${{ inputs.feed_name }}"/*.apk "$GITHUB_WORKSPACE/stash/" 2>/dev/null || true
+          echo "::endgroup::"
+        done
+
+    - name: Index and sign
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd sdk
+        FEED_BIN=$(echo bin/packages/*/"${{ inputs.feed_name }}")
+        # restore stashed older-version packages removed by ipkg-remove (no-clobber:
+        # freshly built files win), then index over the complete set
+        cp -n "$GITHUB_WORKSPACE/stash/"* "$FEED_BIN"/ 2>/dev/null || true
+        make package/index V=s
+        ls -la "$FEED_BIN"
+        if [ "${{ inputs.pkg_type }}" = ipk ]; then
+          test -s "$FEED_BIN/Packages" && test -s "$FEED_BIN/Packages.sig"
+          if [ -n "${{ inputs.usign_pub }}" ]; then
+            USIGN=$(find staging_dir/host/bin -name usign | head -n1)
+            "$USIGN" -V -m "$FEED_BIN/Packages" -x "$FEED_BIN/Packages.sig" \
+              -p "$GITHUB_WORKSPACE/${{ inputs.usign_pub }}"
+            echo "usign signature VERIFIED"
+          fi
+        else
+          test -s "$FEED_BIN/packages.adb"
+        fi
+
+    - name: Stage output
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$GITHUB_WORKSPACE/${{ inputs.out_dir }}"
+        cp -v sdk/bin/packages/*/"${{ inputs.feed_name }}"/* "$GITHUB_WORKSPACE/${{ inputs.out_dir }}/"
